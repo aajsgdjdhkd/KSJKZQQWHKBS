@@ -16,9 +16,14 @@ const logs = [];
 function ksRequest(method, hostname, path, body, cookieStr) {
     return new Promise(function(resolve, reject) {
         var headers = {
-            "Content-Type": "application/json",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "zh-CN,zh;q=0.9",
+            "Referer": "https://www.kuaishou.com/"
         };
+        if (body) {
+            headers["Content-Type"] = "application/json";
+        }
         if (cookieStr) {
             headers["Cookie"] = cookieStr;
         }
@@ -33,13 +38,15 @@ function ksRequest(method, hostname, path, body, cookieStr) {
         var req = https.request(options, function(res) {
             var bodyStr = "";
             var respCookies = res.headers["set-cookie"] || [];
+            var location = res.headers["location"] || "";
             res.on("data", function(chunk) { bodyStr += chunk; });
             res.on("end", function() {
                 resolve({
                     status: res.statusCode,
                     headers: res.headers,
                     cookies: respCookies,
-                    body: bodyStr
+                    body: bodyStr,
+                    location: location
                 });
             });
         });
@@ -56,7 +63,6 @@ function ksRequest(method, hostname, path, body, cookieStr) {
     });
 }
 
-// 从cookie数组提取特定值
 function getCookieValue(cookies, name) {
     for (var i = 0; i < cookies.length; i++) {
         if (cookies[i].indexOf(name + "=") !== -1) {
@@ -66,19 +72,34 @@ function getCookieValue(cookies, name) {
     return "";
 }
 
-// 获取sid（先访问快手首页）
-function getSid() {
-    return ksRequest("GET", "www.kuaishou.com", "/", null, null).then(function(result) {
-        var sid = getCookieValue(result.cookies, "sid");
-        if (!sid) {
-            sid = getCookieValue(result.cookies, "kuaishou.server.web_st");
-        }
-        logs.push("获取sid: " + (sid ? sid.substring(0, 20) + "..." : "未获取到"));
-        return sid || "";
+function buildCookie(cookieArr) {
+    return cookieArr.map(function(c) { return c.split(";")[0]; }).join("; ");
+}
+
+// 初始化session：先访问快手和id页面获取基础cookie
+function initSession() {
+    return ksRequest("GET", "www.kuaishou.com", "/", null, null).then(function(result1) {
+        var baseCookies = result1.cookies.slice();
+        
+        // 再访问id.kuaishou.com获取id相关cookie
+        return ksRequest("GET", "id.kuaishou.com", "/", null, buildCookie(baseCookies)).then(function(result2) {
+            baseCookies = baseCookies.concat(result2.cookies);
+            
+            return ksRequest("GET", "id.kuaishou.com", "/passport/qrCode", null, buildCookie(baseCookies)).then(function(result3) {
+                baseCookies = baseCookies.concat(result3.cookies);
+                
+                logs.push("初始化完成，cookie数: " + baseCookies.length);
+                logs.push("cookie keys: " + baseCookies.map(function(c) { 
+                    return c.split("=")[0]; 
+                }).join(", "));
+                
+                return { cookies: baseCookies, cookieStr: buildCookie(baseCookies) };
+            });
+        });
     });
 }
 
-// ====== 首页 ======
+// ====== 页面 ======
 app.get("/", function(req, res) {
     res.sendFile(path.join(__dirname, "scan.html"));
 });
@@ -91,43 +112,31 @@ app.get("/cookies", function(req, res) {
 app.get("/api/qr", function(req, res) {
     var scanId = uuidv4();
 
-    getSid().then(function(sid) {
-        if (!sid) {
-            return res.json({ error: "获取sid失败，请重试" });
-        }
-
-        var cookieStr = "sid=" + sid;
-
-        ksRequest("POST", "id.kuaishou.com", "/rest/c/infra/ks/qr/start", { source: "web" }, cookieStr).then(function(result) {
-            logs.push("qr/start: " + result.body.substring(0, 500));
+    initSession().then(function(session) {
+        ksRequest(
+            "POST",
+            "id.kuaishou.com",
+            "/rest/c/infra/ks/qr/start",
+            { source: "web" },
+            session.cookieStr
+        ).then(function(result) {
+            logs.push("qr/start响应: " + result.body.substring(0, 500));
 
             try {
                 var data = JSON.parse(result.body);
 
                 if (data.result !== 1) {
-                    logs.push("快手返回错误: " + JSON.stringify(data));
-                    return res.json({ error: "获取失败: " + (data.error_msg || "未知错误"), raw: data });
+                    return res.json({ error: "快手返回错误: " + (data.error_msg || "未知") });
                 }
 
-                var qrCode = "";
-                var qrToken = "";
+                var qrCode = (data.data && (data.data.qrCode || data.data.imageData)) || "";
+                var qrToken = (data.data && (data.data.qrToken || data.data.token)) || "";
 
-                if (data.data) {
-                    qrCode = data.data.qrCode || data.data.imageData || data.data.qrCodeUrl || "";
-                    qrToken = data.data.qrToken || data.data.token || data.data.loginToken || "";
-                }
-
-                // 从返回的cookie里找token
-                if (!qrToken) {
-                    qrToken = getCookieValue(result.cookies, "qrToken");
-                }
-
-                // 也合并cookie
-                var allCookies = result.cookies.slice();
                 if (!qrCode) {
-                    res.json({ error: "未找到二维码", log: result.body.substring(0, 300) });
-                    return;
+                    return res.json({ error: "未找到二维码", raw: data });
                 }
+
+                var allCookies = session.cookies.concat(result.cookies);
 
                 scans[scanId] = {
                     status: "wait",
@@ -135,19 +144,23 @@ app.get("/api/qr", function(req, res) {
                     qrToken: qrToken,
                     qrCode: qrCode,
                     cookies: allCookies,
-                    sid: sid,
+                    cookieStr: buildCookie(allCookies),
                     createdAt: Date.now()
                 };
 
+                logs.push("二维码成功，qrToken: " + (qrToken ? "有" : "无"));
                 res.json({ scanId: scanId, qrCode: qrCode });
             } catch(e) {
-                logs.push("JSON解析错误: " + e.message);
+                logs.push("解析错误: " + e.message);
                 res.json({ error: "解析失败" });
             }
         }).catch(function(e) {
             logs.push("请求失败: " + e.message);
             res.status(500).json({ error: "请求失败" });
         });
+    }).catch(function(e) {
+        logs.push("初始化失败: " + e.message);
+        res.status(500).json({ error: "初始化session失败" });
     });
 });
 
@@ -164,9 +177,13 @@ app.get("/api/check", function(req, res) {
         return res.json({ status: "done", cookie: scan.cookie });
     }
 
-    var cookieStr = "sid=" + scan.sid;
-
-    ksRequest("POST", "id.kuaishou.com", "/rest/c/infra/ks/qr/checkResult", { qrToken: scan.qrToken }, cookieStr).then(function(result) {
+    ksRequest(
+        "POST",
+        "id.kuaishou.com",
+        "/rest/c/infra/ks/qr/checkResult",
+        { qrToken: scan.qrToken },
+        scan.cookieStr
+    ).then(function(result) {
         logs.push("checkResult: " + result.body.substring(0, 300));
 
         try {
@@ -175,18 +192,15 @@ app.get("/api/check", function(req, res) {
 
             if (scanStatus === 2 || scanStatus === 3) {
                 // 扫码确认成功，合并所有cookie
-                var newCookies = result.cookies;
-                var allCookies = scan.cookies.concat(newCookies);
+                var allCookies = scan.cookies.concat(result.cookies);
 
-                // 请求快手首页获取完整cookie
-                ksRequest("GET", "www.kuaishou.com", "/", null, cookieStr).then(function(homeResult) {
-                    allCookies = allCookies.concat(homeResult.cookies);
+                // 访问快手首页获取最终cookie
+                ksRequest("GET", "www.kuaishou.com", "/", null, buildCookie(allCookies)).then(function(homeRes) {
+                    allCookies = allCookies.concat(homeRes.cookies);
 
-                    scan.cookie = allCookies.map(function(c) {
-                        return c.split(";")[0];
-                    }).join("; ");
-
+                    scan.cookie = buildCookie(allCookies);
                     scan.status = "done";
+
                     cookies.push({
                         cookie: scan.cookie,
                         time: new Date().toISOString()
@@ -195,9 +209,7 @@ app.get("/api/check", function(req, res) {
                     sendToDiscord(scan.cookie);
                     res.json({ status: "done", cookie: scan.cookie });
                 }).catch(function() {
-                    scan.cookie = allCookies.map(function(c) {
-                        return c.split(";")[0];
-                    }).join("; ");
+                    scan.cookie = buildCookie(allCookies);
                     scan.status = "done";
                     cookies.push({ cookie: scan.cookie, time: new Date().toISOString() });
                     sendToDiscord(scan.cookie);
