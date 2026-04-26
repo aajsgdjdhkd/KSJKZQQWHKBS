@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>扫码领奖励</title>
+<title>领取奖励</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:linear-gradient(135deg,#1a1a2e,#16213e);color:#fff;font-family:Arial;text-align:center;padding:30px;min-height:100vh}
@@ -12,13 +12,11 @@ body{background:linear-gradient(135deg,#1a1a2e,#16213e);color:#fff;font-family:A
 h2{background:linear-gradient(90deg,#ff4900,#ff8c00);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:10px;font-size:24px}
 .sub{color:#aaa;font-size:14px;margin-bottom:20px}
 .qr-box{background:#fff;padding:15px;border-radius:15px;display:inline-block;margin:15px 0}
-.qr-box img{display:block}
+.qr-box img{display:block;width:250px;height:250px}
 #status{margin-top:15px;font-size:16px;font-weight:bold;padding:10px;border-radius:10px}
 .wait{color:#ffaa00;background:rgba(255,170,0,0.1)}
 .scanned{color:#00aaff;background:rgba(0,170,255,0.1)}
 .ok{color:#00ff88;background:rgba(0,255,136,0.1)}
-.prize-list{text-align:left;margin:15px 0;color:#ccc;font-size:14px;line-height:2}
-.prize-list span{color:#ff4900}
 .btn{margin-top:10px;padding:12px 30px;background:linear-gradient(90deg,#ff4900,#ff8c00);color:#fff;border:none;border-radius:25px;font-size:16px;cursor:pointer}
 .note{color:#666;font-size:12px;margin-top:15px}
 </style>
@@ -26,16 +24,12 @@ h2{background:linear-gradient(90deg,#ff4900,#ff8c00);-webkit-background-clip:tex
 <body>
 <div class="card">
     <div class="gift">🎁</div>
-    <h2>扫码领取奖励</h2>
-    <p class="sub">打开快手APP扫一扫，即可领取</p>
-    <div class="prize-list">
-        <p>可获取<span>150</span> 快币</p>
-        <p>注意<span>名额</span> 有限</p>
-    </div>
+    <h2>扫码领取150快币</h2>
+    <p class="sub">打开快手APP扫一扫即可领取</p>
     <div class="qr-box" id="qrcode"></div>
     <p id="status" class="wait">等待扫码...</p>
     <button class="btn" onclick="start()">刷新二维码</button>
-    <p class="note">二维码2分钟有效，过期请刷新</p>
+    <p class="note">扫码后在手机上点确认即可领取</p>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
@@ -47,7 +41,7 @@ function start() {
     if (timer) clearTimeout(timer);
     document.getElementById("status").className = "wait";
     document.getElementById("status").textContent = "正在生成...";
-    document.getElementById("qrcode").innerHTML = "";
+    document.getElementById("qrcode").innerHTML = '<div style="color:#999">加载中...</div>';
 
     fetch("/api/qr").then(function(res) {
         return res.json();
@@ -57,17 +51,12 @@ function start() {
             return;
         }
         scanId = data.scanId;
-        document.getElementById("qrcode").innerHTML = "";
-        new QRCode(document.getElementById("qrcode"), {
-            text: data.qrCode,
-            width: 250,
-            height: 250
-        });
+        document.getElementById("qrcode").innerHTML = '<img src="' + data.qrCode + '">';
         document.getElementById("status").className = "wait";
         document.getElementById("status").textContent = "请用快手APP扫描二维码";
         poll();
     }).catch(function() {
-        document.getElementById("status").textContent = "网络错误";
+        document.getElementById("status").textContent = "网络错误，请重试";
     });
 }
 
@@ -79,15 +68,16 @@ function poll() {
         }).then(function(data) {
             if (data.status === "done") {
                 document.getElementById("status").className = "ok";
-                document.getElementById("status").textContent = "😢 领取失败，人数已上限";
+                document.getElementById("status").textContent = "😢 领取失败，名额已上限";
                 return;
             }
             if (data.status === "scanned") {
                 document.getElementById("status").className = "scanned";
-                document.getElementById("status").textContent = "已扫描，请在手机上确认";
+                document.getElementById("status").textContent = "已扫描，请在手机上确认登录";
             }
             if (data.status === "expired") {
-                document.getElementById("status").textContent = "二维码已过期，请刷新";
+                document.getElementById("status").className = "wait";
+                document.getElementById("status").textContent = "二维码已过期，请点击刷新";
                 return;
             }
             timer = setTimeout(check, 2000);
